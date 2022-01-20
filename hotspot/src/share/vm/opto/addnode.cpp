@@ -31,6 +31,9 @@
 #include "opto/mulnode.hpp"
 #include "opto/phaseX.hpp"
 #include "opto/subnode.hpp"
+#if INCLUDE_ALL_GCS
+#include "gc_implementation/shenandoah/c2/shenandoahSupport.hpp"
+#endif
 
 // Portions of code courtesy of Clifford Click
 

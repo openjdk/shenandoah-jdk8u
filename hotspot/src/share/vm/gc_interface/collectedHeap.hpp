@@ -80,6 +80,7 @@ class GCHeapLog : public EventLogBase<GCMessage> {
 //     GenCollectedHeap
 //     G1CollectedHeap
 //   ParallelScavengeHeap
+//   ShenandoahHeap
 //
 class CollectedHeap : public CHeapObj<mtInternal> {
   friend class VMStructs;
@@ -188,7 +189,8 @@ class CollectedHeap : public CHeapObj<mtInternal> {
     SharedHeap,
     GenCollectedHeap,
     ParallelScavengeHeap,
-    G1CollectedHeap
+    G1CollectedHeap,
+    ShenandoahHeap
   };
 
   static inline size_t filler_array_max_size() {
@@ -605,6 +607,19 @@ class CollectedHeap : public CHeapObj<mtInternal> {
 
   // Heap verification
   virtual void verify(bool silent, VerifyOption option) = 0;
+
+  // Shut down all GC workers and other GC related threads.
+  virtual void shutdown();
+
+  // Accumulate additional statistics from GCLABs.
+  virtual void accumulate_statistics_all_gclabs();
+
+  // Support for object pinning. This is used by JNI Get*Critical()
+  // and Release*Critical() family of functions. If supported, the GC
+  // must guarantee that pinned objects never move.
+  virtual bool supports_object_pinning() const;
+  virtual oop pin_object(JavaThread* thread, oop obj);
+  virtual void unpin_object(JavaThread* thread, oop obj);
 
   // Non product verification and debugging.
 #ifndef PRODUCT

@@ -33,6 +33,8 @@
 #include "ci/ciArrayKlass.hpp"
 #include "ci/ciInstance.hpp"
 #include "ci/ciObjArray.hpp"
+#include "gc_implementation/shenandoah/shenandoahHeap.hpp"
+#include "gc_implementation/shenandoah/c1/shenandoahBarrierSetC1.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/stubRoutines.hpp"
 #include "utilities/bitMap.inline.hpp"
@@ -1229,6 +1231,15 @@ void LIRGenerator::do_Reference_get(Intrinsic* x) {
 
   LIR_Opr result = rlock_result(x);
 
+#if INCLUDE_ALL_GCS
+  if (UseShenandoahGC) {
+    LIR_Opr tmp = new_register(T_OBJECT);
+    LIR_Opr addr = ShenandoahBarrierSet::barrier_set()->bsc1()->resolve_address(this, referent_field_adr, T_OBJECT, NULL);
+    __ load(addr->as_address_ptr(), tmp, info);
+    tmp = ShenandoahBarrierSet::barrier_set()->bsc1()->load_reference_barrier(this, tmp, addr);
+    __ move(tmp, result);
+  } else
+#endif
   __ load(referent_field_adr, result, info);
 
   // Register the value in the referent field with the pre-barrier
@@ -1422,6 +1433,11 @@ void LIRGenerator::pre_barrier(LIR_Opr addr_opr, LIR_Opr pre_val,
     case BarrierSet::G1SATBCTLogging:
       G1SATBCardTableModRef_pre_barrier(addr_opr, pre_val, do_load, patch, info);
       break;
+    case BarrierSet::ShenandoahBarrierSet:
+      if (ShenandoahSATBBarrier) {
+        G1SATBCardTableModRef_pre_barrier(addr_opr, pre_val, do_load, patch, info);
+      }
+      break;
 #endif // INCLUDE_ALL_GCS
     case BarrierSet::CardTableModRef:
     case BarrierSet::CardTableExtension:
@@ -1443,6 +1459,9 @@ void LIRGenerator::post_barrier(LIR_OprDesc* addr, LIR_OprDesc* new_val) {
     case BarrierSet::G1SATBCT:
     case BarrierSet::G1SATBCTLogging:
       G1SATBCardTableModRef_post_barrier(addr,  new_val);
+      break;
+    case BarrierSet::ShenandoahBarrierSet:
+      ShenandoahBarrierSetC1::bsc1()->storeval_barrier(this, new_val, NULL, false);
       break;
 #endif // INCLUDE_ALL_GCS
     case BarrierSet::CardTableModRef:
@@ -1810,15 +1829,32 @@ void LIRGenerator::do_LoadField(LoadField* x) {
     address = generate_address(object.result(), x->offset(), field_type);
   }
 
+#if INCLUDE_ALL_GCS
+  if (UseShenandoahGC && (field_type == T_OBJECT || field_type == T_ARRAY)) {
+    LIR_Opr tmp = new_register(T_OBJECT);
+    LIR_Opr addr = ShenandoahBarrierSet::barrier_set()->bsc1()->resolve_address(this, address, field_type, needs_patching ? info : NULL);
+    if (is_volatile) {
+      volatile_field_load(addr->as_address_ptr(), tmp, info);
+    } else {
+      __ load(addr->as_address_ptr(), tmp, info);
+    }
+    if (is_volatile && os::is_MP()) {
+      __ membar_acquire();
+    }
+    tmp = ShenandoahBarrierSet::barrier_set()->bsc1()->load_reference_barrier(this, tmp, addr);
+    __ move(tmp, reg);
+  } else
+#endif
+  {
   if (is_volatile && !needs_patching) {
     volatile_field_load(address, reg, info);
   } else {
     LIR_PatchCode patch_code = needs_patching ? lir_patch_normal : lir_patch_none;
     __ load(address, reg, info, patch_code);
   }
-
   if (is_volatile && os::is_MP()) {
     __ membar_acquire();
+  }
   }
 }
 
@@ -1936,7 +1972,19 @@ void LIRGenerator::do_LoadIndexed(LoadIndexed* x) {
     }
   }
 
-  __ move(array_addr, rlock_result(x, x->elt_type()), null_check_info);
+  LIR_Opr result = rlock_result(x, x->elt_type());
+
+#if INCLUDE_ALL_GCS
+  if (UseShenandoahGC && (x->elt_type() == T_OBJECT || x->elt_type() == T_ARRAY)) {
+    LIR_Opr tmp = new_register(T_OBJECT);
+    LIR_Opr addr = ShenandoahBarrierSet::barrier_set()->bsc1()->resolve_address(this, array_addr, x->elt_type(), NULL);
+    __ move(addr->as_address_ptr(), tmp, null_check_info);
+    tmp = ShenandoahBarrierSet::barrier_set()->bsc1()->load_reference_barrier(this, tmp, addr);
+    __ move(tmp, result);
+  } else
+#endif
+  __ move(array_addr, result, null_check_info);
+
 }
 
 
@@ -2225,6 +2273,14 @@ void LIRGenerator::do_UnsafeGetObject(UnsafeGetObject* x) {
 
   LIR_Opr value = rlock_result(x, x->basic_type());
 
+#if INCLUDE_ALL_GCS
+  if (UseShenandoahGC && (type == T_OBJECT || type == T_ARRAY)) {
+    LIR_Opr tmp = new_register(T_OBJECT);
+    get_Object_unsafe(tmp, src.result(), off.result(), type, x->is_volatile());
+    tmp = ShenandoahBarrierSet::barrier_set()->bsc1()->load_reference_barrier(this, tmp, LIR_OprFact::addressConst(0));
+    __ move(tmp, value);
+  } else
+#endif
   get_Object_unsafe(value, src.result(), off.result(), type, x->is_volatile());
 
 #if INCLUDE_ALL_GCS
@@ -2243,7 +2299,7 @@ void LIRGenerator::do_UnsafeGetObject(UnsafeGetObject* x) {
   //   }
   // }
 
-  if (UseG1GC && type == T_OBJECT) {
+  if ((UseShenandoahGC || UseG1GC) && type == T_OBJECT) {
     bool gen_pre_barrier = true;     // Assume we need to generate pre_barrier.
     bool gen_offset_check = true;    // Assume we need to generate the offset guard.
     bool gen_source_check = true;    // Assume we need to check the src object for null.

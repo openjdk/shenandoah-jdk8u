@@ -2825,6 +2825,22 @@ void SharedRuntime::convert_ints_to_longints(int i2l_argcnt, int& in_args_count,
   }
 }
 
+JRT_LEAF(oopDesc*, SharedRuntime::pin_object(JavaThread* thread, oopDesc* obj))
+  assert(Universe::heap()->supports_object_pinning(), "Why we here?");
+  assert(obj != NULL, "Should not be null");
+  oop o(obj);
+  o = Universe::heap()->pin_object(thread, o);
+  assert(o != NULL, "Should not be null");
+  return o;
+JRT_END
+
+JRT_LEAF(void, SharedRuntime::unpin_object(JavaThread* thread, oopDesc* obj))
+  assert(Universe::heap()->supports_object_pinning(), "Why we here?");
+  assert(obj != NULL, "Should not be null");
+  oop o(obj);
+  Universe::heap()->unpin_object(thread, o);
+JRT_END
+
 // -------------------------------------------------------------------------
 // Java-Java calling convention
 // (what you use when Java calls Java)

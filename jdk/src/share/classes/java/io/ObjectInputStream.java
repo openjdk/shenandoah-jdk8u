@@ -44,7 +44,6 @@ import java.util.concurrent.ConcurrentMap;
 
 import static java.io.ObjectStreamClass.processQueue;
 
-import sun.misc.SharedSecrets;
 import sun.misc.ObjectInputFilter;
 import sun.misc.ObjectStreamClassValidator;
 import sun.misc.SharedSecrets;

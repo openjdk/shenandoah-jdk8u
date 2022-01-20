@@ -38,9 +38,13 @@
 #include "runtime/stubCodeGenerator.hpp"
 #include "runtime/stubRoutines.hpp"
 #include "runtime/thread.inline.hpp"
+#include "utilities/macros.hpp"
 #include "utilities/top.hpp"
 #ifdef COMPILER2
 #include "opto/runtime.hpp"
+#endif
+#if INCLUDE_ALL_GCS
+#include "shenandoahBarrierSetAssembler_x86.hpp"
 #endif
 
 // Declaration and definition of StubGenerator (no .hpp file).
@@ -702,7 +706,7 @@ class StubGenerator: public StubCodeGenerator {
   //  Input:
   //     start   -  starting address
   //     count   -  element count
-  void  gen_write_ref_array_pre_barrier(Register start, Register count, bool uninitialized_target) {
+  void  gen_write_ref_array_pre_barrier(Register src, Register start, Register count, bool uninitialized_target) {
     assert_different_registers(start, count);
     BarrierSet* bs = Universe::heap()->barrier_set();
     switch (bs->kind()) {
@@ -720,6 +724,11 @@ class StubGenerator: public StubCodeGenerator {
       case BarrierSet::CardTableExtension:
       case BarrierSet::ModRef:
         break;
+#if INCLUDE_ALL_GCS
+      case BarrierSet::ShenandoahBarrierSet:
+        ShenandoahBarrierSetAssembler::bsasm()->arraycopy_prologue(_masm, uninitialized_target, src, start, count);
+        break;
+#endif
       default      :
         ShouldNotReachHere();
 
@@ -772,6 +781,7 @@ class StubGenerator: public StubCodeGenerator {
         }
         break;
       case BarrierSet::ModRef:
+      case BarrierSet::ShenandoahBarrierSet:
         break;
       default      :
         ShouldNotReachHere();
@@ -937,7 +947,7 @@ class StubGenerator: public StubCodeGenerator {
     if (t == T_OBJECT) {
       __ testl(count, count);
       __ jcc(Assembler::zero, L_0_count);
-      gen_write_ref_array_pre_barrier(to, count, dest_uninitialized);
+      gen_write_ref_array_pre_barrier(from, to, count, dest_uninitialized);
       __ mov(saved_to, to);          // save 'to'
     }
 
@@ -1116,7 +1126,7 @@ class StubGenerator: public StubCodeGenerator {
     if (t == T_OBJECT) {
       __ testl(count, count);
       __ jcc(Assembler::zero, L_0_count);
-      gen_write_ref_array_pre_barrier(dst, count, dest_uninitialized);
+      gen_write_ref_array_pre_barrier(src, dst, count, dest_uninitialized);
     }
 
     // copy from high to low
@@ -1463,7 +1473,7 @@ class StubGenerator: public StubCodeGenerator {
     Address elem_klass_addr(elem, oopDesc::klass_offset_in_bytes());
 
     // Copy from low to high addresses, indexed from the end of each array.
-    gen_write_ref_array_pre_barrier(to, count, dest_uninitialized);
+    gen_write_ref_array_pre_barrier(from, to, count, dest_uninitialized);
     __ lea(end_from, end_from_addr);
     __ lea(end_to,   end_to_addr);
     assert(length == count, "");        // else fix next line:
@@ -1484,12 +1494,30 @@ class StubGenerator: public StubCodeGenerator {
     __ BIND(L_store_element);
     __ movptr(to_element_addr, elem);     // store the oop
     __ increment(count);                // increment the count toward zero
+#if INCLUDE_ALL_GCS
+    if (UseShenandoahGC) {
+      // Shenandoah barrier is too big for 8-bit offsets to work
+      __ jcc(Assembler::zero, L_do_card_marks);
+    } else
+#endif
     __ jccb(Assembler::zero, L_do_card_marks);
 
     // ======== loop entry is here ========
     __ BIND(L_load_element);
+#if INCLUDE_ALL_GCS
+    if (UseShenandoahGC) {
+      // Needs GC barriers
+      __ load_heap_oop(elem, from_element_addr);
+    } else
+#endif
     __ movptr(elem, from_element_addr);   // load the oop
     __ testptr(elem, elem);
+#if INCLUDE_ALL_GCS
+    if (UseShenandoahGC) {
+      // Shenandoah barrier is too big for 8-bit offsets to work
+      __ jcc(Assembler::zero, L_store_element);
+    } else
+#endif
     __ jccb(Assembler::zero, L_store_element);
 
     // (Could do a trick here:  Remember last successful non-null

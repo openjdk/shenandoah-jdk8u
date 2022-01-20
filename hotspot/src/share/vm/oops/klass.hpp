@@ -37,6 +37,7 @@
 #if INCLUDE_ALL_GCS
 #include "gc_implementation/concurrentMarkSweep/cmsOopClosures.hpp"
 #include "gc_implementation/g1/g1OopClosures.hpp"
+#include "gc_implementation/shenandoah/shenandoahOopClosures.hpp"
 #include "gc_implementation/parNew/parOopClosures.hpp"
 #endif // INCLUDE_ALL_GCS
 #if INCLUDE_JFR

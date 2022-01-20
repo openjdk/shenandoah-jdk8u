@@ -34,6 +34,7 @@ import java.util.*;
 import sun.jvm.hotspot.debugger.*;
 import sun.jvm.hotspot.gc_interface.*;
 import sun.jvm.hotspot.gc_implementation.g1.*;
+import sun.jvm.hotspot.gc_implementation.shenandoah.*;
 import sun.jvm.hotspot.gc_implementation.parallelScavenge.*;
 import sun.jvm.hotspot.memory.*;
 import sun.jvm.hotspot.runtime.*;
@@ -437,10 +438,13 @@ public class ObjectHeap {
     } else if (heap instanceof G1CollectedHeap) {
         G1CollectedHeap g1h = (G1CollectedHeap) heap;
         g1h.heapRegionIterate(lrc);
+    } else if (heap instanceof ShenandoahHeap) {
+       ShenandoahHeap sh = (ShenandoahHeap) heap;
+       addLiveRegions("heap", sh.getLiveRegions(), liveRegions);
     } else {
        if (Assert.ASSERTS_ENABLED) {
           Assert.that(false, "Expecting GenCollectedHeap, G1CollectedHeap, " +
-                      "or ParallelScavengeHeap, but got " +
+                      "SheandoahHeap or ParallelScavengeHeap, but got " +
                       heap.getClass().getName());
        }
     }

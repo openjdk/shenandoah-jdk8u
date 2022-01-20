@@ -173,6 +173,7 @@
 #include "gc_implementation/parallelScavenge/psYoungGen.hpp"
 #include "gc_implementation/parallelScavenge/vmStructs_parallelgc.hpp"
 #include "gc_implementation/g1/vmStructs_g1.hpp"
+#include "gc_implementation/shenandoah/vmStructs_shenandoah.hpp"
 #endif // INCLUDE_ALL_GCS
 
 #ifdef COMPILER2
@@ -2223,6 +2224,7 @@ typedef TwoOopHashtable<Symbol*, mtClass>     SymbolTwoOopHashtable;
   declare_constant(BarrierSet::CardTableExtension)                        \
   declare_constant(BarrierSet::G1SATBCT)                                  \
   declare_constant(BarrierSet::G1SATBCTLogging)                           \
+  declare_constant(BarrierSet::ShenandoahBarrierSet)                      \
   declare_constant(BarrierSet::Other)                                     \
                                                                           \
   declare_constant(BlockOffsetSharedArray::LogN)                          \
@@ -2246,6 +2248,7 @@ typedef TwoOopHashtable<Symbol*, mtClass>     SymbolTwoOopHashtable;
   declare_constant(CollectedHeap::Abstract)                               \
   declare_constant(CollectedHeap::SharedHeap)                             \
   declare_constant(CollectedHeap::GenCollectedHeap)                       \
+  declare_constant(CollectedHeap::ShenandoahHeap)                         \
                                                                           \
   declare_constant(GenCollectedHeap::max_gens)                            \
                                                                           \
@@ -2923,6 +2926,11 @@ VMStructEntry VMStructs::localHotSpotVMStructs[] = {
 
   VM_STRUCTS_G1(GENERATE_NONSTATIC_VM_STRUCT_ENTRY,
                 GENERATE_STATIC_VM_STRUCT_ENTRY)
+
+  VM_STRUCTS_SHENANDOAH(GENERATE_NONSTATIC_VM_STRUCT_ENTRY,
+                        GENERATE_NONSTATIC_VM_STRUCT_ENTRY,
+                        GENERATE_STATIC_VM_STRUCT_ENTRY)
+
 #endif // INCLUDE_ALL_GCS
 
   VM_STRUCTS_CPU(GENERATE_NONSTATIC_VM_STRUCT_ENTRY,
@@ -2968,6 +2976,10 @@ VMTypeEntry VMStructs::localHotSpotVMTypes[] = {
 
   VM_TYPES_G1(GENERATE_VM_TYPE_ENTRY,
               GENERATE_TOPLEVEL_VM_TYPE_ENTRY)
+
+  VM_TYPES_SHENANDOAH(GENERATE_VM_TYPE_ENTRY,
+              GENERATE_TOPLEVEL_VM_TYPE_ENTRY,
+              GENERATE_INTEGER_VM_TYPE_ENTRY)
 #endif // INCLUDE_ALL_GCS
 
   VM_TYPES_CPU(GENERATE_VM_TYPE_ENTRY,
@@ -3003,6 +3015,9 @@ VMIntConstantEntry VMStructs::localHotSpotVMIntConstants[] = {
   VM_INT_CONSTANTS_CMS(GENERATE_VM_INT_CONSTANT_ENTRY)
 
   VM_INT_CONSTANTS_PARNEW(GENERATE_VM_INT_CONSTANT_ENTRY)
+
+  VM_INT_CONSTANTS_SHENANDOAH(GENERATE_VM_INT_CONSTANT_ENTRY,
+                              GENERATE_VM_INT_CONSTANT_WITH_VALUE_ENTRY)
 #endif // INCLUDE_ALL_GCS
 
   VM_INT_CONSTANTS_CPU(GENERATE_VM_INT_CONSTANT_ENTRY,
@@ -3069,6 +3084,10 @@ VMStructs::init() {
   VM_STRUCTS_G1(CHECK_NONSTATIC_VM_STRUCT_ENTRY,
                 CHECK_STATIC_VM_STRUCT_ENTRY);
 
+
+  VM_STRUCTS_SHENANDOAH(CHECK_NONSTATIC_VM_STRUCT_ENTRY,
+                        CHECK_VOLATILE_NONSTATIC_VM_STRUCT_ENTRY,
+                        CHECK_STATIC_VM_STRUCT_ENTRY);
 #endif // INCLUDE_ALL_GCS
 
   VM_STRUCTS_CPU(CHECK_NONSTATIC_VM_STRUCT_ENTRY,
@@ -3110,6 +3129,9 @@ VMStructs::init() {
   VM_TYPES_G1(CHECK_VM_TYPE_ENTRY,
               CHECK_SINGLE_ARG_VM_TYPE_NO_OP);
 
+  VM_TYPES_SHENANDOAH(CHECK_VM_TYPE_ENTRY,
+                      CHECK_SINGLE_ARG_VM_TYPE_NO_OP,
+                      CHECK_SINGLE_ARG_VM_TYPE_NO_OP);
 #endif // INCLUDE_ALL_GCS
 
   VM_TYPES_CPU(CHECK_VM_TYPE_ENTRY,

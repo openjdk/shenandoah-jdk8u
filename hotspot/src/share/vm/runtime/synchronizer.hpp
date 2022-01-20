@@ -36,7 +36,11 @@ class ObjectMonitor;
 
 class ObjectSynchronizer : AllStatic {
   friend class VMStructs;
- public:
+#if INCLUDE_ALL_GCS
+  friend class ShenandoahSynchronizerIterator;
+#endif
+
+public:
   typedef enum {
     owner_self,
     owner_none,

@@ -36,6 +36,10 @@
 #include "opto/phaseX.hpp"
 #include "opto/subnode.hpp"
 #include "runtime/sharedRuntime.hpp"
+#if INCLUDE_ALL_GCS
+#include "gc_implementation/shenandoah/c2/shenandoahBarrierSetC2.hpp"
+#include "gc_implementation/shenandoah/c2/shenandoahSupport.hpp"
+#endif
 
 // Portions of code courtesy of Clifford Click
 
@@ -849,8 +853,14 @@ static inline Node* isa_java_mirror_load(PhaseGVN* phase, Node* n) {
   // Return the klass node for
   //   LoadP(AddP(foo:Klass, #java_mirror))
   //   or NULL if not matching.
-  if (n->Opcode() != Op_LoadP) return NULL;
 
+#if INCLUDE_ALL_GCS
+  if (UseShenandoahGC) {
+    n = ShenandoahBarrierSetC2::bsc2()->step_over_gc_barrier(n);
+  }
+#endif
+
+  if (n->Opcode() != Op_LoadP) return NULL;
   const TypeInstPtr* tp = phase->type(n)->isa_instptr();
   if (!tp || tp->klass() != phase->C->env()->Class_klass()) return NULL;
 
@@ -917,8 +927,17 @@ Node *CmpPNode::Ideal( PhaseGVN *phase, bool can_reshape ) {
     if (k1 && (k2 || conk2)) {
       Node* lhs = k1;
       Node* rhs = (k2 != NULL) ? k2 : conk2;
-      this->set_req(1, lhs);
-      this->set_req(2, rhs);
+#if INCLUDE_ALL_GCS
+      PhaseIterGVN* igvn = phase->is_IterGVN();
+      if (UseShenandoahGC && igvn != NULL) {
+        set_req_X(1, lhs, igvn);
+        set_req_X(2, rhs, igvn);
+      } else
+#endif
+      {
+        set_req(1, lhs);
+        set_req(2, rhs);
+      }
       return this;
     }
   }

@@ -32,6 +32,9 @@
 #include "opto/mulnode.hpp"
 #include "opto/rootnode.hpp"
 #include "opto/subnode.hpp"
+#if INCLUDE_ALL_GCS
+#include "gc_implementation/shenandoah/c2/shenandoahSupport.hpp"
+#endif
 
 //=============================================================================
 //------------------------------split_thru_phi---------------------------------
@@ -117,6 +120,7 @@ Node *PhaseIdealLoop::split_thru_phi( Node *n, Node *region, int policy ) {
       // otherwise it will be not updated during igvn->transform since
       // igvn->type(x) is set to x->Value() already.
       x->raise_bottom_type(t);
+      if (x->Opcode() != Op_ShenandoahLoadReferenceBarrier) {
       Node *y = x->Identity(&_igvn);
       if (y != x) {
         wins++;
@@ -132,6 +136,9 @@ Node *PhaseIdealLoop::split_thru_phi( Node *n, Node *region, int policy ) {
           // because set_type has already been called.
           _igvn._worklist.push(x);
         }
+      }
+      } else {
+        _igvn._worklist.push(x);
       }
     }
     if (x != the_clone && the_clone != NULL)
@@ -304,7 +311,8 @@ Node *PhaseIdealLoop::has_local_phi_input( Node *n ) {
           get_ctrl(m->in(2)) != n_ctrl &&
           get_ctrl(m->in(3)) != n_ctrl) {
         // Move the AddP up to dominating point
-        set_ctrl_and_loop(m, find_non_split_ctrl(idom(n_ctrl)));
+        Node* c = find_non_split_ctrl(idom(n_ctrl));
+        set_ctrl_and_loop(m, c);
         continue;
       }
       return NULL;
@@ -742,6 +750,11 @@ Node *PhaseIdealLoop::split_if_with_blocks_pre( Node *n ) {
   // Moved a load around the loop, 'en-registering' something.
   if (n_blk->is_Loop() && n->is_Load() &&
       !phi->in(LoopNode::LoopBackControl)->is_Load())
+    C->set_major_progress();
+
+  // Moved a barrier around the loop, 'en-registering' something.
+  if (n_blk->is_Loop() && n->Opcode() == Op_ShenandoahLoadReferenceBarrier &&
+      phi->in(LoopNode::LoopBackControl)->Opcode() != Op_ShenandoahLoadReferenceBarrier)
     C->set_major_progress();
 
   return phi;

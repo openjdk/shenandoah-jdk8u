@@ -927,6 +927,9 @@ definitions %{
 source_hpp %{
 
 #include "opto/addnode.hpp"
+#if INCLUDE_ALL_GCS
+#include "shenandoahBarrierSetAssembler_aarch64.hpp"
+#endif
 
 class CallStubImpl {
  
@@ -2798,6 +2801,15 @@ encode %{
   %}
 
 
+  enc_class aarch64_enc_cmpxchg_oop_shenandoah(memory mem, iRegP oldval, iRegP newval, iRegPNoSp tmp, iRegINoSp res) %{
+    MacroAssembler _masm(&cbuf);
+    guarantee($mem$$index == -1 && $mem$$disp == 0, "impossible encoding");
+    Register tmp = $tmp$$Register;
+    __ mov(tmp, $oldval$$Register); // Must not clobber oldval.
+    ShenandoahBarrierSetAssembler::bsasm()->cmpxchg_oop(&_masm, $mem$$Register, tmp, $newval$$Register,
+                              /*acquire*/ false, /*release*/ true, /*weak*/ false, /*is_cae*/ false, $res$$Register);
+  %}
+
   // The only difference between aarch64_enc_cmpxchg and
   // aarch64_enc_cmpxchg_acq is that we use load-acquire in the
   // CompareAndSwap sequence to serve as a barrier on acquiring a
@@ -2814,6 +2826,16 @@ encode %{
     guarantee($mem$$index == -1 && $mem$$disp == 0, "impossible encoding");
     __ cmpxchg($mem$$base$$Register, $oldval$$Register, $newval$$Register,
                Assembler::word, /*acquire*/ true, /*release*/ true);
+  %}
+
+  enc_class aarch64_enc_cmpxchg_acq_oop_shenandoah(memory mem, iRegP oldval, iRegP newval, iRegPNoSp tmp, iRegINoSp res) %{
+    MacroAssembler _masm(&cbuf);
+    guarantee($mem$$index == -1 && $mem$$disp == 0, "impossible encoding");
+    Register tmp = $tmp$$Register;
+    __ mov(tmp, $oldval$$Register); // Must not clobber oldval.
+    ShenandoahBarrierSetAssembler::bsasm()->cmpxchg_oop(&_masm, $mem$$Register, tmp, $newval$$Register,
+                              /*acquire*/ true, /*release*/ true, /*weak*/ false, /*is_cae*/ false,
+                              $res$$Register);
   %}
 
   // auxiliary used for CompareAndSwapX to set result register
@@ -4214,8 +4236,8 @@ operand immPollPage()
 operand immByteMapBase()
 %{
   // Get base of card map
-  predicate((jbyte*)n->get_ptr() ==
-	((CardTableModRefBS*)(Universe::heap()->barrier_set()))->byte_map_base);
+  predicate(!UseShenandoahGC && // TODO: Should really check for BS::is_a, see JDK-8193193
+    (jbyte*)n->get_ptr() == ((CardTableModRefBS*)(Universe::heap()->barrier_set()))->byte_map_base);
   match(ConP);
 
   op_cost(0);
@@ -6939,7 +6961,53 @@ instruct storeP(iRegP src, memory mem)
   ins_cost(INSN_COST);
   format %{ "str  $src, $mem\t# ptr" %}
 
-  ins_encode(aarch64_enc_str(src, mem));
+  ins_encode %{
+    int opcode = $mem->opcode();
+    Register base = as_Register($mem$$base);
+    int index = $mem$$index;
+    int size = $mem$$scale;
+    int disp = $mem$$disp;
+    Register reg = as_Register($src$$reg);
+
+    // we sometimes get asked to store the stack pointer into the
+    // current thread -- we cannot do that directly on AArch64
+    if (reg == r31_sp) {
+      MacroAssembler _masm(&cbuf);
+      assert(as_Register($mem$$base) == rthread, "unexpected store for sp");
+      __ mov(rscratch2, sp);
+      reg = rscratch2;
+    }
+    Address::extend scale;
+
+    // Hooboy, this is fugly.  We need a way to communicate to the
+    // encoder that the index needs to be sign extended, so we have to
+    // enumerate all the cases.
+    switch (opcode) {
+    case INDINDEXSCALEDOFFSETI2L:
+    case INDINDEXSCALEDI2L:
+    case INDINDEXSCALEDOFFSETI2LN:
+    case INDINDEXSCALEDI2LN:
+    case INDINDEXOFFSETI2L:
+    case INDINDEXOFFSETI2LN:
+      scale = Address::sxtw(size);
+      break;
+    default:
+      scale = Address::lsl(size);
+    }
+    Address adr;
+    if (index == -1) {
+      adr = Address(base, disp);
+    } else {
+      if (disp == 0) {
+        adr = Address(base, as_Register(index), scale);
+      } else {
+        __ lea(rscratch1, Address(base, disp));
+        adr = Address(rscratch1, as_Register(index), scale);
+      }
+    }
+
+    __ str(reg, adr);
+  %}
 
   ins_pipe(istore_reg_mem);
 %}
@@ -8063,6 +8131,7 @@ instruct compareAndSwapL(iRegINoSp res, indirect mem, iRegLNoSp oldval, iRegLNoS
 
 instruct compareAndSwapP(iRegINoSp res, indirect mem, iRegP oldval, iRegP newval, rFlagsReg cr) %{
 
+  predicate(!UseShenandoahGC || !ShenandoahCASBarrier || n->in(3)->in(1)->bottom_type() == TypePtr::NULL_PTR);
   match(Set res (CompareAndSwapP mem (Binary oldval newval)));
   ins_cost(2 * VOLATILE_REF_COST);
 
@@ -8079,8 +8148,26 @@ instruct compareAndSwapP(iRegINoSp res, indirect mem, iRegP oldval, iRegP newval
   ins_pipe(pipe_slow);
 %}
 
+instruct compareAndSwapP_shenandoah(iRegINoSp res, indirect mem, iRegP oldval, iRegP newval, iRegPNoSp tmp, rFlagsReg cr) %{
+
+  predicate(UseShenandoahGC && ShenandoahCASBarrier && n->in(3)->in(1)->bottom_type() != TypePtr::NULL_PTR);
+  match(Set res (CompareAndSwapP mem (Binary oldval newval)));
+  ins_cost(2 * VOLATILE_REF_COST);
+
+  effect(TEMP tmp, KILL cr);
+
+  format %{
+    "cmpxchg_shenandoah_oop $mem, $oldval, $newval\t# (ptr) if $mem == $oldval then $mem <-- $newval with temp $tmp"
+  %}
+
+  ins_encode(aarch64_enc_cmpxchg_oop_shenandoah(mem, oldval, newval, tmp, res));
+
+  ins_pipe(pipe_slow);
+%}
+
 instruct compareAndSwapN(iRegINoSp res, indirect mem, iRegNNoSp oldval, iRegNNoSp newval, rFlagsReg cr) %{
 
+  predicate(!UseShenandoahGC || !ShenandoahCASBarrier || n->in(3)->in(1)->bottom_type() == TypeNarrowOop::NULL_PTR);
   match(Set res (CompareAndSwapN mem (Binary oldval newval)));
   ins_cost(2 * VOLATILE_REF_COST);
 
@@ -8097,6 +8184,26 @@ instruct compareAndSwapN(iRegINoSp res, indirect mem, iRegNNoSp oldval, iRegNNoS
   ins_pipe(pipe_slow);
 %}
 
+instruct compareAndSwapN_shenandoah(iRegINoSp res, indirect mem, iRegN oldval, iRegN newval, iRegNNoSp tmp, rFlagsReg cr) %{
+
+  predicate(UseShenandoahGC && ShenandoahCASBarrier && n->in(3)->in(1)->bottom_type() != TypeNarrowOop::NULL_PTR);
+  match(Set res (CompareAndSwapN mem (Binary oldval newval)));
+  ins_cost(2 * VOLATILE_REF_COST);
+
+  effect(TEMP tmp, KILL cr);
+
+  format %{
+    "cmpxchgw_shenandoah_narrow_oop $mem, $oldval, $newval\t# (ptr) if $mem == $oldval then $mem <-- $newval with temp $tmp"
+  %}
+
+  ins_encode %{
+    Register tmp = $tmp$$Register;
+    __ mov(tmp, $oldval$$Register); // Must not clobber oldval.
+    ShenandoahBarrierSetAssembler::bsasm()->cmpxchg_oop(&_masm, $mem$$Register, tmp, $newval$$Register, /*acquire*/ false, /*release*/ true, /*weak*/ false, /*is_cae*/ false, $res$$Register);
+  %}
+
+  ins_pipe(pipe_slow);
+%}
 
 // alternative CompareAndSwapX when we are eliding barriers
 
@@ -8140,7 +8247,7 @@ instruct compareAndSwapLAcq(iRegINoSp res, indirect mem, iRegLNoSp oldval, iRegL
 
 instruct compareAndSwapPAcq(iRegINoSp res, indirect mem, iRegP oldval, iRegP newval, rFlagsReg cr) %{
 
-  predicate(needs_acquiring_load_exclusive(n));
+  predicate(needs_acquiring_load_exclusive(n) && (!UseShenandoahGC || !ShenandoahCASBarrier || n->in(3)->in(1)->bottom_type() == TypePtr::NULL_PTR));
   match(Set res (CompareAndSwapP mem (Binary oldval newval)));
   ins_cost(VOLATILE_REF_COST);
 
@@ -8157,9 +8264,26 @@ instruct compareAndSwapPAcq(iRegINoSp res, indirect mem, iRegP oldval, iRegP new
   ins_pipe(pipe_slow);
 %}
 
+instruct compareAndSwapPAcq_shenandoah(iRegINoSp res, indirect mem, iRegP oldval, iRegP newval, iRegPNoSp tmp, rFlagsReg cr) %{
+
+  predicate(needs_acquiring_load_exclusive(n) && UseShenandoahGC && ShenandoahCASBarrier && n->in(3)->in(1)->bottom_type() != TypePtr::NULL_PTR);
+  match(Set res (CompareAndSwapP mem (Binary oldval newval)));
+  ins_cost(VOLATILE_REF_COST);
+
+  effect(TEMP tmp, KILL cr);
+
+  format %{
+    "cmpxchg_acq_shenandoah_oop $mem, $oldval, $newval\t# (ptr) if $mem == $oldval then $mem <-- $newval with temp $tmp"
+  %}
+
+  ins_encode(aarch64_enc_cmpxchg_acq_oop_shenandoah(mem, oldval, newval, tmp, res));
+
+  ins_pipe(pipe_slow);
+%}
+
 instruct compareAndSwapNAcq(iRegINoSp res, indirect mem, iRegNNoSp oldval, iRegNNoSp newval, rFlagsReg cr) %{
 
-  predicate(needs_acquiring_load_exclusive(n));
+  predicate(needs_acquiring_load_exclusive(n) && (!UseShenandoahGC || !ShenandoahCASBarrier|| n->in(3)->in(1)->bottom_type() == TypeNarrowOop::NULL_PTR));
   match(Set res (CompareAndSwapN mem (Binary oldval newval)));
   ins_cost(VOLATILE_REF_COST);
 
@@ -8176,6 +8300,26 @@ instruct compareAndSwapNAcq(iRegINoSp res, indirect mem, iRegNNoSp oldval, iRegN
   ins_pipe(pipe_slow);
 %}
 
+instruct compareAndSwapNAcq_shenandoah(iRegINoSp res, indirect mem, iRegN oldval, iRegN newval, iRegNNoSp tmp, rFlagsReg cr) %{
+
+  predicate(needs_acquiring_load_exclusive(n) && UseShenandoahGC && ShenandoahCASBarrier && n->in(3)->in(1)->bottom_type() != TypeNarrowOop::NULL_PTR);
+  match(Set res (CompareAndSwapN mem (Binary oldval newval)));
+  ins_cost(VOLATILE_REF_COST);
+
+  effect(TEMP tmp, KILL cr);
+
+ format %{
+    "cmpxchgw_acq_shenandoah_narrow_oop $mem, $oldval, $newval\t# (ptr) if $mem == $oldval then $mem <-- $newval with temp $tmp"
+ %}
+
+  ins_encode %{
+    Register tmp = $tmp$$Register;
+    __ mov(tmp, $oldval$$Register); // Must not clobber oldval.
+    ShenandoahBarrierSetAssembler::bsasm()->cmpxchg_oop(&_masm, $mem$$Register, tmp, $newval$$Register, /*acquire*/ true, /*release*/ true, /*weak*/ false, /*is_cae*/ false, $res$$Register);
+  %}
+
+  ins_pipe(pipe_slow);
+%}
 
 instruct get_and_setI(indirect mem, iRegI newv, iRegINoSp prev) %{
   match(Set prev (GetAndSetI mem newv));

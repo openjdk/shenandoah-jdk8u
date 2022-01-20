@@ -36,6 +36,10 @@
 #include "runtime/deoptimization.hpp"
 #include "runtime/handles.inline.hpp"
 
+#if INCLUDE_ALL_GCS
+#include "gc_implementation/shenandoah/c2/shenandoahBarrierSetC2.hpp"
+#endif
+
 //=============================================================================
 // Helper methods for _get* and _put* bytecodes
 //=============================================================================
@@ -236,6 +240,13 @@ void Parse::do_get_xxx(Node* obj, ciField* field, bool is_field) {
   MemNode::MemOrd mo = is_vol ? MemNode::acquire : MemNode::unordered;
   Node* ld = make_load(NULL, adr, type, bt, adr_type, mo, LoadNode::DependsOnlyOnTest, is_vol);
 
+  Node* load = ld;
+#if INCLUDE_ALL_GCS
+  if (UseShenandoahGC && (bt == T_OBJECT || bt == T_ARRAY)) {
+    ld = ShenandoahBarrierSetC2::bsc2()->load_reference_barrier(this, ld);
+  }
+#endif
+
   // Adjust Java stack
   if (type2size[bt] == 1)
     push(ld);
@@ -274,7 +285,7 @@ void Parse::do_get_xxx(Node* obj, ciField* field, bool is_field) {
   if (field->is_volatile()) {
     // Memory barrier includes bogus read of value to force load BEFORE membar
     assert(leading_membar == NULL || support_IRIW_for_not_multiple_copy_atomic_cpu, "no leading membar expected");
-    Node* mb = insert_mem_bar(Op_MemBarAcquire, ld);
+    Node* mb = insert_mem_bar(Op_MemBarAcquire, load);
     mb->as_MemBar()->set_trailing_load();
   }
 }

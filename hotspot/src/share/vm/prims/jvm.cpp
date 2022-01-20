@@ -73,6 +73,7 @@
 #include "utilities/dtrace.hpp"
 #include "utilities/events.hpp"
 #include "utilities/histogram.hpp"
+#include "utilities/macros.hpp"
 #include "utilities/top.hpp"
 #include "utilities/utf8.hpp"
 #ifdef TARGET_OS_FAMILY_linux
@@ -93,6 +94,7 @@
 
 #if INCLUDE_ALL_GCS
 #include "gc_implementation/g1/g1SATBCardTableModRefBS.hpp"
+#include "gc_implementation/shenandoah/shenandoahBarrierSetClone.inline.hpp"
 #endif // INCLUDE_ALL_GCS
 
 #include <errno.h>
@@ -609,7 +611,7 @@ static void fixup_cloned_reference(ReferenceType ref_type, oop src, oop clone) {
   // If G1 is enabled then we need to register a non-null referent
   // with the SATB barrier.
 #if INCLUDE_ALL_GCS
-  if (UseG1GC) {
+  if (UseG1GC || (UseShenandoahGC && ShenandoahSATBBarrier)) {
     oop referent = java_lang_ref_Reference::referent(clone);
     if (referent != NULL) {
       G1SATBCardTableModRefBS::enqueue(referent);
@@ -665,6 +667,12 @@ JVM_ENTRY(jobject, JVM_Clone(JNIEnv* env, jobject handle))
            "invariant");
     new_obj_oop = CollectedHeap::obj_allocate(klass, size, CHECK_NULL);
   }
+
+#if INCLUDE_ALL_GCS
+  if (UseShenandoahGC && ShenandoahCloneBarrier) {
+    ShenandoahBarrierSet::barrier_set()->clone_barrier_runtime(obj());
+  }
+#endif
 
   // 4839641 (4840070): We must do an oop-atomic copy, because if another thread
   // is modifying a reference field in the clonee, a non-oop-atomic copy might
@@ -1171,7 +1179,6 @@ static jclass jvm_define_class_common(JNIEnv *env, const char *name,
 
   return (jclass) JNIHandles::make_local(env, k->java_mirror());
 }
-
 
 JVM_ENTRY(jclass, JVM_DefineClass(JNIEnv *env, const char *name, jobject loader, const jbyte *buf, jsize len, jobject pd))
   JVMWrapper2("JVM_DefineClass %s", name);
