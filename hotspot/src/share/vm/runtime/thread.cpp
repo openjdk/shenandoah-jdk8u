@@ -1483,6 +1483,7 @@ void JavaThread::initialize() {
   set_monitor_chunks(NULL);
   set_next(NULL);
   set_thread_state(_thread_new);
+  _in_asgct = false;
   _terminated = _not_terminated;
   _privileged_stack_top = NULL;
   _array_for_gc = NULL;
@@ -4268,7 +4269,7 @@ void Threads::possibly_parallel_oops_do(OopClosure* f, CLDClosure* cld_f, CodeBl
   assert(!is_par ||
          (SharedHeap::heap()->n_par_threads() ==
           SharedHeap::heap()->workers()->active_workers()
-	  || UseShenandoahGC), "Mismatch");
+          || UseShenandoahGC), "Mismatch");
   int cp = SharedHeap::heap()->strong_roots_parity();
   ALL_JAVA_THREADS(p) {
     if (p->claim_oops_do(is_par, cp)) {
