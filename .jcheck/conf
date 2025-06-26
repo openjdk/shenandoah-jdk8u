@@ -1,7 +1,7 @@
 [general]
 project=shenandoah
 jbs=JDK
-version=shenandoah8u422
+version=shenandoah8u432
 
 [checks]
 error=author,committer,reviewers,merge,issues,executable,symlink,message,hg-tag,whitespace
